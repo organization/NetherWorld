@@ -1,0 +1,6 @@
+name: NetherWorld
+main: NetherWorld\NetherWorld
+version: 1.0-Alpha
+api:
+- 1.13.0
+- 2.0.0
