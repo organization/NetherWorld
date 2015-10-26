@@ -33,13 +33,58 @@ class NetherWorld extends PluginBase implements Listener {
 			}
 		}
 	}
-	public function onBlockBreakEvent(BlockBreakEvent $event){
-		if($event->getBlock()->getId() == Block::OBSIDIAN or $event->getBlock()->getId() == 90){
-			
+	public function onBlockBreakEvent(BlockBreakEvent $event) {
+		if ($event->getBlock ()->getId () == Block::OBSIDIAN or $event->getBlock ()->getId () == 90)
+			$this->breakHellDoor ( $event->getBlock () );
+	}
+	public function breakHellDoor(Block $block) {
+		$result = $this->getHellDoorBlocks ( $block, [ 
+				"nestingDepth" => 0 
+		] );
+		$nestingDepth = 0;
+		foreach ( $result as $pos => $bool ) {
+			$nestingDepth ++;
+			if ($nestingDepth >= 20)
+				break;
+			$pos = explode ( ":", $pos );
+			if (isset ( $pos [2] ))
+				$block->getLevel ()->setBlock ( new Vector3 ( $pos [0], $pos [1], $pos [2] ), Block::get ( Block::AIR ) );
 		}
 	}
-	public function breakHellDoor(Level $level, Position $pos){
-		//
+	public function getHellDoorBlocks(Block $block, $data) {
+		$data ["nestingDepth"] ++;
+		if ($data ["nestingDepth"] >= 20)
+			return $data;
+		$sides = [ 
+				Vector3::SIDE_EAST,
+				Vector3::SIDE_WEST,
+				Vector3::SIDE_NORTH,
+				Vector3::SIDE_SOUTH,
+				Vector3::SIDE_UP,
+				Vector3::SIDE_DOWN 
+		];
+		$blockPos = "{$block->x}:{$block->y}:{$block->z}";
+		if (! isset ( $data [$blockPos] ))
+			$data [$blockPos] = true;
+		foreach ( $sides as $side ) {
+			if ($data ["nestingDepth"] >= 20)
+				break;
+			$sideBlock = $block->getSide ( $side );
+			$sideBlockPos = "{$sideBlock->x}:{$sideBlock->y}:{$sideBlock->z}";
+			if (isset ( $data [$sideBlockPos] ))
+				continue;
+			$id = $sideBlock->getId ();
+			if ($id == 90) {
+				$data [$sideBlockPos] = true;
+				$returns = $this->getHellDoorBlocks ( $sideBlock, $data );
+				if ($returns ["nestingDepth"] >= 20)
+					break;
+				foreach ( $returns as $returnPos => $bool )
+					if (! isset ( $data [$returnPos] ))
+						$data [$returnPos] = true;
+			}
+		}
+		return $data;
 	}
 	public function canActivate(Level $level, Position $pos) {
 		// +-x y +-z
