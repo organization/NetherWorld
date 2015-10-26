@@ -12,15 +12,27 @@ use pocketmine\level\Position;
 use pocketmine\level\Level;
 use pocketmine\math\Vector3;
 use pocketmine\event\block\BlockBreakEvent;
+use pocketmine\Player;
+use pocketmine\math\Math;
 
 class NetherWorld extends PluginBase implements Listener {
 	public function onEnable() {
 		$this->getServer ()->getPluginManager ()->registerEvents ( $this, $this );
+		$this->getServer ()->getScheduler ()->scheduleRepeatingTask ( new MoveCheckTask ( $this ), 60 );
 		$this->createHell ();
 	}
 	public function createHell() {
 		$generator = Generator::getGenerator ( "nether" );
 		$this->getServer ()->generateLevel ( "nether", null, $generator );
+		
+		$level = $this->getServer ()->getLevelByName ( "nether" );
+		$spawn = $level->getSafeSpawn ();
+		$level->generateChunk ( $spawn->x, $spawn->z );
+		
+		$x = $spawn->x;
+		$z = $spawn->z - 2;
+		$y = $level->getHighestBlockAt ( $x, $z );
+		// TODO DOOR CREATE
 	}
 	public function onPlayerInteractEvent(PlayerInteractEvent $event) {
 		if ($event->getItem ()->getId () == Item::FLINT_AND_STEEL and $event->getFace () == 1) {
@@ -32,6 +44,18 @@ class NetherWorld extends PluginBase implements Listener {
 				}
 			}
 		}
+	}
+	public function checkInsidePortal() {
+		foreach ( $this->getServer ()->getOnlinePlayers () as $player ) {
+			if ($this->isInsidePortal ( $player )) {
+				// MOVE TO HELL
+				// OR MOVE TO NORMAL WORLD
+			}
+		}
+	}
+	public function isInsidePortal(Player $player) {
+		$block = $player->getLevel ()->getBlock ( $player->temporalVector->setComponents ( Math::floorFloat ( $player->x ), Math::floorFloat ( $y = ($player->y + $player->getEyeHeight ()) ), Math::floorFloat ( $player->z ) ) );
+		return $block->getId () == 90;
 	}
 	public function onBlockBreakEvent(BlockBreakEvent $event) {
 		if ($event->getBlock ()->getId () == Block::OBSIDIAN or $event->getBlock ()->getId () == 90)
