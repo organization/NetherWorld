@@ -14,25 +14,126 @@ use pocketmine\math\Vector3;
 use pocketmine\event\block\BlockBreakEvent;
 use pocketmine\Player;
 use pocketmine\math\Math;
+use pocketmine\event\player\PlayerQuitEvent;
+use pocketmine\event\player\PlayerKickEvent;
+use NetherWorld\location\LocationLoader;
+use NetherWorld\location\LocationProvider;
+use pocketmine\network\protocol\StartGamePacket;
+use pocketmine\event\player\PlayerJoinEvent;
+use pocketmine\event\server\DataPacketReceiveEvent;
+use pocketmine\event\server\DataPacketSendEvent;
 
 class NetherWorld extends PluginBase implements Listener {
+	/**
+	 *
+	 * @var LocationLoader
+	 */
+	private $locationLoader;
+	/**
+	 *
+	 * @var LocationProvider
+	 */
+	private $locationProvider;
 	public function onEnable() {
-		$this->getServer ()->getPluginManager ()->registerEvents ( $this, $this );
+		$this->locationLoader = new LocationLoader ( $this );
+		$this->locationProvider = new LocationProvider ( $this );
+		
 		$this->getServer ()->getScheduler ()->scheduleRepeatingTask ( new MoveCheckTask ( $this ), 60 );
 		$this->createHell ();
+		
+		$this->getServer ()->getPluginManager ()->registerEvents ( $this, $this );
+	}
+	public function getLocationLoader() {
+		return $this->locationLoader;
+	}
+	public function getLocationProvider() {
+		return $this->locationProvider;
+	}
+	public function onPlayerQuitEvent(PlayerQuitEvent $event) {
+		$this->locationLoader->unloadLocation ( $event->getPlayer ()->getName () );
+	}
+	public function onPlayerKickEvent(PlayerKickEvent $event) {
+		$this->locationLoader->unloadLocation ( $event->getPlayer ()->getName () );
 	}
 	public function createHell() {
 		$generator = Generator::getGenerator ( "nether" );
-		$this->getServer ()->generateLevel ( "nether", null, $generator );
+		$bool = $this->getServer ()->generateLevel ( "nether", null, $generator );
 		
-		$level = $this->getServer ()->getLevelByName ( "nether" );
-		$spawn = $level->getSafeSpawn ();
-		$level->generateChunk ( $spawn->x, $spawn->z );
+		if (! $this->getServer ()->getLevelByName ( "nether" ) instanceof Level)
+			$this->getServer ()->loadLevel ( "nether" );
 		
-		$x = $spawn->x;
-		$z = $spawn->z - 2;
-		$y = $level->getHighestBlockAt ( $x, $z );
-		// TODO DOOR CREATE
+		if (! $bool) {
+			$level = $this->getServer ()->getLevelByName ( "nether" );
+			if ($level instanceof Level) {
+				$spawn = $level->getSafeSpawn ();
+				$level->generateChunk ( $spawn->x, $spawn->z );
+				
+				$x = $spawn->x;
+				$y = $spawn->y;
+				$z = $spawn->z;
+				
+				$hellDoorData = $this->locationProvider->getLocationToName ( "@hellLocation" );
+				$hellDoorData->savePosition ( new Position ( $x, $y + 2, $z, $level ) );
+				
+				$z -= 2;
+				
+				// DOOR CREATE
+				$doorLength = 6;
+				$doorHeight = 10;
+				$portalBlock = new Block ( 90 );
+				$vector = new Vector3 ( $x, $y, $z );
+				
+				$centerX = $x + ($doorLength / 2);
+				
+				for($dx = 0; $dx <= ($doorLength - 1); $dx ++) {
+					$level->setBlock ( $vector->setComponents ( $centerX + $dx, $y, $z ), $portalBlock );
+					$level->setBlock ( $vector->setComponents ( $centerX + $dx, $y + $doorHeight, $z ), $portalBlock );
+				}
+				for($dy = 0; $dy <= ($doorHeight - 1); $dy ++) {
+					$level->setBlock ( $vector->setComponents ( $centerX - ($doorLength / 2), $y + $dy, $z ), $portalBlock );
+					$level->setBlock ( $vector->setComponents ( $centerX + ($doorLength / 2), $y + $dy, $z ), $portalBlock );
+				}
+				
+				$startX = $centerX - ($doorLength / 2);
+				$startY = $y;
+				$startZ = $z;
+				$endX = $centerX + ($doorLength / 2);
+				$endY = $y + $doorHeight;
+				$endZ = $z;
+				
+				if ($startX > $endX) {
+					$backup = $endX;
+					$endX = $startX;
+					$startX = $backup;
+				}
+				if ($startY > $endY) {
+					$backup = $endY;
+					$endY = $startY;
+					$startY = $backup;
+				}
+				if ($startZ > $endZ) {
+					$backup = $endZ;
+					$endZ = $startZ;
+					$startZ = $backup;
+				}
+				
+				$startY ++;
+				$endY = $endY - 2;
+				
+				if ($startZ == $endZ) {
+					$startX ++;
+					$endX --;
+				} else {
+					$startZ ++;
+					$endZ --;
+				}
+				
+				for($x = $startX; $x <= $endX; $x ++)
+					for($y = $startY; $y <= $endY; $y ++)
+						for($z = $startZ; $z <= $endZ; $z ++)
+							$level->setBlock ( $vector->setComponents ( $x, $y, $z ), $portalBlock );
+			}
+		}
 	}
 	public function onPlayerInteractEvent(PlayerInteractEvent $event) {
 		if ($event->getItem ()->getId () == Item::FLINT_AND_STEEL and $event->getFace () == 1) {
@@ -48,10 +149,65 @@ class NetherWorld extends PluginBase implements Listener {
 	public function checkInsidePortal() {
 		foreach ( $this->getServer ()->getOnlinePlayers () as $player ) {
 			if ($this->isInsidePortal ( $player )) {
-				// MOVE TO HELL
-				// OR MOVE TO NORMAL WORLD
+				if ($player->getLevel ()->getName () != "nether") {
+					// MOVE TO HELL
+					$locationData = $this->locationProvider->getLocation ( $player );
+					$pos = $player->getPosition ();
+					$pos = new Position ( $pos->x + 2, $pos->y + 2, $pos->z + 2, $pos->getLevel () );
+					$locationData->savePosition ( $pos, $player->pitch, $player->yaw );
+					
+					$hellDoorData = $this->locationProvider->getLocationToName ( "@hellLocation" );
+					$player->teleport ( $hellDoorData->getPosition (), 0, 0 );
+					
+					$pk = new ChangeDimensionPacket ();
+					$pk->eid = 0;
+					$pk->dimensionId = 1;
+					// $this->sendChangeDimension ( $player, 1 );
+					$player->dataPacket ( $pk );
+					
+					$player->chunk = null;
+					$player->checkNetwork ();
+					// $this->sendChangeDimension ( $player, - 1 );
+				} else {
+					// OR MOVE TO NORMAL WORLD
+					$locationData = $this->locationProvider->getLocation ( $player );
+					$player->teleport ( $locationData->getPosition (), $locationData->getYaw (), $locationData->getPitch () );
+				}
 			}
 		}
+	}
+	public function onPlayerJoinEvent(PlayerJoinEvent $event) {
+		// $pk = new ChangeDimensionPacket ();
+		// $pk->eid = 0;
+		// $pk->dimensionId = - 1;
+		// $event->getPlayer ()->dataPacket ( $pk );
+		// $this->sendChangeDimension ( $event->getPlayer (), 1 );
+	}
+	public function checkSend(DataPacketSendEvent $event) {
+		// if ($event->getPacket () instanceof StartGamePacket) {
+		// $event->getPacket ()->dimension = 1;
+		// }
+	}
+	public function checkReceive(DataPacketReceiveEvent $event) {
+		// echo "pid: " . $event->getPacket ()->pid () . " 0x" . dechex ( $event->getPacket ()->pid () ) . "\n";
+	}
+	public function sendChangeDimension(Player $player, $dimension = 0) {
+		echo "sendChangeDimension\n";
+		$pk = new StartGamePacket ();
+		$pk->seed = - 1;
+		$pk->dimension = $dimension;
+		$pk->x = $player->x;
+		$pk->y = $player->y;
+		$pk->z = $player->z;
+		$spawnPosition = $player->getSpawn ();
+		$pk->spawnX = ( int ) $spawnPosition->x;
+		$pk->spawnY = ( int ) $spawnPosition->y;
+		$pk->spawnZ = ( int ) $spawnPosition->z;
+		$pk->generator = 1; // 0 old, 1 infinite, 2 flat
+		$pk->gamemode = $player->gamemode & 0x01;
+		$pk->eid = 0;
+		$player->dataPacket ( $pk );
+		$player->sendSettings ();
 	}
 	public function isInsidePortal(Player $player) {
 		$block = $player->getLevel ()->getBlock ( $player->temporalVector->setComponents ( Math::floorFloat ( $player->x ), Math::floorFloat ( $y = ($player->y + $player->getEyeHeight ()) ), Math::floorFloat ( $player->z ) ) );
